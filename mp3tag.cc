@@ -20,6 +20,7 @@
 #include <taglib/id3v2header.h>
 #include <taglib/id3v2frame.h>
 #include <taglib/id3v2tag.h>
+#include <taglib/apetag.h>
 #include <taglib/tlist.h>
 #include <taglib/textidentificationframe.h>
 #include <taglib/commentsframe.h>
@@ -293,7 +294,10 @@ void  _tag(TagLib::Tag*  tag_, const IFlds&  flds_)
 
 void  _displayID3v1Tag(const TagLib::ID3v1::Tag*  tag_, const char* file_, const char* hdr_)
 {
-    cout << "id3v1 tag: " << file_ << "  (not multibyte safe)" << endl
+    if (tag_->isEmpty()) {
+        return;
+    }
+    cout << "id3v1 tag: " << file_ << "  (not multibyte safe)\n"
 	 << "    Artist  : " << _strrep(tag_->artist()) << endl
          << "    Title   : " << _strrep(tag_->title()) << "      Track : " << tag_->track() << endl
 	 << "    Album   : " << _strrep(tag_->album()) << endl
@@ -330,7 +334,12 @@ void  _displayID3v2Tag(const TagLib::ID3v2::Tag*  tag_, const char* file_, const
 {
     TagLib::ID3v2::Header*  hdr = tag_->header();
     short  version = hdr ? hdr->majorVersion() : 0;
-    cout << "id3v2." << version << " tag : " << file_ << endl
+    cout << "id3v2." << version << " tag : " << file_;
+    if (tag_->isEmpty()) {
+        cout << "  <EMPTY>" << endl;
+        return;
+    }
+    cout << endl
 	 << "    Artist  : " << _strrep(tag_->artist()) << endl
          << "    Title   : " << _strrep(tag_->title()) << "      Track : " << tag_->track() << endl
 	 << "    Album   : " << _strrep(tag_->album()) << endl
@@ -354,6 +363,20 @@ void  _displayID3v2Tag(const TagLib::ID3v2::Tag*  tag_, const char* file_, const
     }
 }
 
+void  _displayAPETag(const TagLib::APE::Tag*  tag_, const char* file_, const char* hdr_)
+{
+    cout << "APE tag: " << file_;
+    if (tag_->isEmpty()) {
+        cout << "  <EMPTY>" << endl;
+        return;
+    }
+    cout << endl
+	 << "    Artist  : " << _strrep(tag_->artist()) << endl
+         << "    Title   : " << _strrep(tag_->title()) << "      Track : " << tag_->track() << endl
+	 << "    Album   : " << _strrep(tag_->album()) << endl
+	 << "    Comment : " << _strrep(tag_->comment()) << endl
+	 << "    Year    : " << tag_->year() << "    " << "Genre   : " << _strrep(tag_->genre()) << endl;
+}
 
 
 TagLib::String::Type  _parseEnc(const char* optarg, TagLib::String::Type dflt_)
@@ -379,6 +402,8 @@ int main(int argc, char *argv[])
     bool  list = false;
     bool  clean = false;
     bool  mbconvert = false;
+    bool  prsvtm = false;
+
     /* what we're encoding from */
     TagLib::String::Type  mbenc = TagLib::String::UTF8;
 
@@ -393,7 +418,7 @@ int main(int argc, char *argv[])
     }
 
     int c;
-    while ( (c = getopt(argc, argv, "e:12hla:t:A:y:c:T:g:D:VM:C")) != EOF)
+    while ( (c = getopt(argc, argv, "e:12hla:t:A:y:c:T:g:D:VM:Cp")) != EOF)
     {
 	switch (c) {
 	    case 'e':
@@ -418,6 +443,7 @@ int main(int argc, char *argv[])
 	    {
 	        rmtag |= optarg[0] == '1' ? TagLib::MPEG::File::ID3v1 : rmtag;
 	        rmtag |= optarg[0] == '2' ? TagLib::MPEG::File::ID3v2 : rmtag;
+	        rmtag |= optarg[0] == 'A' ? TagLib::MPEG::File::APE : rmtag;
 		
 		if (strcmp(optarg, "12") == 0 || strcmp(optarg, "21") == 0) {
 		    rmtag = TagLib::MPEG::File::AllTags;
@@ -425,6 +451,7 @@ int main(int argc, char *argv[])
 	    } break;
 
 	    case 'V':  _verbose = true;  break;
+	    case 'p':  prsvtm = true;  break;
 
 	    case 'C':  clean = true;  break;
 	    case 'M':
@@ -449,7 +476,8 @@ int main(int argc, char *argv[])
     }
     
     if ( (!list && !iflds && !rmtag && !clean && !mbconvert) || (iflds && mbconvert)) {
-	_usage();
+	//_usage();
+        list = true;
     }
     iflds.strip();
 
@@ -498,8 +526,17 @@ int main(int argc, char *argv[])
 	    if ( (tag = tlf.ID3v2Tag(false)) ) {
 	        _displayID3v2Tag((const TagLib::ID3v2::Tag*)tag, f, "ID3v2 tag");
 	    }
-	    continue;
+	    if ( (tag = tlf.APETag(false)) ) {
+	        _displayAPETag((const TagLib::APE::Tag*)tag, f, "APE tag");
+	    }
+            continue;
 	}
+
+        // below are write ops
+        if ( !(st.st_mode & (S_IWUSR | S_IWGRP) )) {
+            MP3_TAG_WARN(f << " - permision denied, no updates made");
+            continue;
+        }
 
 
 
@@ -615,14 +652,16 @@ int main(int argc, char *argv[])
 	    }
 	    else
 	    {
-		/* try to reset the timestamps on the file
-		 */
-		struct utimbuf  ub;
-		ub.actime = st.st_atime;
-		ub.modtime =  st.st_mtime;
-		if ( utime(f, &ub) < 0) {
-		    MP3_TAG_WARN_VERBOSE("'" << f << "' unable to revert to original access times - " << strerror(errno));
-		}
+                if (prsvtm) {
+                    /* try to reset the timestamps on the file
+                     */
+                    struct utimbuf  ub;
+                    ub.actime = st.st_atime;
+                    ub.modtime =  st.st_mtime;
+                    if ( utime(f, &ub) < 0) {
+                        MP3_TAG_WARN_VERBOSE("'" << f << "' unable to revert to original access times - " << strerror(errno));
+                    }
+                }
 	    }
 	}
 #ifdef DEBUG
